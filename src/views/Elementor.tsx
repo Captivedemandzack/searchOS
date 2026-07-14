@@ -1,8 +1,11 @@
-import { elemDefs } from '../data'
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useData, useSiteId } from '../data/DataProvider'
 import { useStore } from '../store'
 import { colors, mono, pill } from '../theme'
 import { Card } from '../components/primitives'
 import { HButton } from '../lib/Hover'
+import { api } from '../lib/api'
 
 const actionBtn = {
   background: '#fff',
@@ -14,8 +17,83 @@ const actionBtn = {
   color: colors.ink,
 }
 
+const inputStyle = {
+  border: `1px solid ${colors.borderInput}`,
+  borderRadius: 8,
+  padding: '7px 10px',
+  fontSize: 12.5,
+  color: colors.text,
+  background: '#fff',
+  width: '100%',
+}
+
+/** Real Phase 5 generator: Claude builds importable Elementor JSON matching the site's style. */
+function ElementorGenerator() {
+  const siteId = useSiteId()
+  const { showToast } = useStore()
+  const queryClient = useQueryClient()
+  const [request, setRequest] = useState('')
+  const [placement, setPlacement] = useState('')
+
+  const generate = useMutation({
+    mutationFn: () =>
+      api.generateElementor(siteId!, { request: request.trim(), placement: placement.trim() || undefined }),
+    onSuccess: (res) => {
+      showToast(
+        `Generated "${res.name}" (${res.size})` + (res.styledFrom ? ` — styled from /${res.styledFrom}` : ''),
+      )
+      setRequest('')
+      setPlacement('')
+      queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
+    onError: (err: Error) => showToast(err.message),
+  })
+  const canRun = request.trim() && !generate.isPending
+
+  return (
+    <Card style={{ padding: '16px 18px', marginBottom: 16, maxWidth: 980 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>Generate a section with AI</div>
+      <div style={{ fontSize: 11.5, color: colors.muted2, marginBottom: 12, lineHeight: 1.5 }}>
+        Describe what to build. Claude produces import-ready Elementor JSON styled to match your existing pages.
+      </div>
+      <textarea
+        placeholder="e.g. A pricing table for Botox with 3 tiers (per-unit, per-area, membership), matching our service pages"
+        value={request}
+        onChange={(e) => setRequest(e.target.value)}
+        style={{ ...inputStyle, minHeight: 66, resize: 'vertical', marginBottom: 10 }}
+      />
+      <div style={{ display: 'flex', gap: 10 }}>
+        <input
+          placeholder="Placement (optional, e.g. /botox-nashville after Treatment Areas)"
+          value={placement}
+          onChange={(e) => setPlacement(e.target.value)}
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <HButton
+          onClick={() => canRun && generate.mutate()}
+          hover={{ background: colors.inkStrong }}
+          style={{
+            background: colors.ink,
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            padding: '8px 16px',
+            fontSize: 12.5,
+            fontWeight: 550,
+            flex: 'none',
+            opacity: canRun ? 1 : 0.5,
+          }}
+        >
+          {generate.isPending ? 'Building…' : 'Generate section'}
+        </HButton>
+      </div>
+    </Card>
+  )
+}
+
 export function ElementorView() {
   const { state, setState, showToast } = useStore()
+  const { elemDefs } = useData()
 
   return (
     <div>
@@ -28,6 +106,8 @@ export function ElementorView() {
           publish only after review.
         </div>
       </div>
+
+      <ElementorGenerator />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 980 }}>
         {elemDefs.map((es) => {

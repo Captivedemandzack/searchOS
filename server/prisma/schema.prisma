@@ -1,0 +1,414 @@
+// Groundwork local-first store.
+// SQLite has no enum / native-JSON / array types, so enum-like fields are String
+// and structured payloads (query lists, JSON-LD, Elementor JSON) are stored as
+// TEXT holding JSON — parsed at the API boundary.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Core entities (populated now from the demo dataset; the shape the UI consumes)
+// ---------------------------------------------------------------------------
+
+model Site {
+  id        String   @id @default(cuid())
+  name      String
+  domain    String   @unique
+  // Connection config — filled in by Phase 1/2 integrations, null until then.
+  wpBaseUrl        String?
+  wpUsername       String?
+  wpAppPasswordEnc String? // Application Password, AES-256-GCM encrypted at rest
+  googleEmail           String? // connected Google account, for display only
+  googleRefreshTokenEnc String? // OAuth refresh token, AES-256-GCM encrypted at rest
+  gscProperty      String? // e.g. "sc-domain:slkclinic.com" — selected after connecting
+  ga4Property      String? // e.g. "384920117" — selected after connecting
+  lastSyncedAt     DateTime? // stamped on every WP/GSC/GA4 sync — drives the real sync indicator
+  createdAt DateTime @default(now())
+
+  opportunities   Opportunity[]
+  recommendations Recommendation[]
+  elementor       ElementorSection[]
+  reviewItems     ReviewItem[]
+  dashboard       DashboardData?
+  pages           Page[]
+  snapshots       Snapshot[]
+  gscRows         GscRow[]
+  ga4Rows         Ga4Row[]
+  changeLog       ChangeLog[]
+  competitorScans CompetitorScan[]
+  blogPosts       BlogPost[]
+  dataProfile     ContentDataProfile?
+  findings        Finding[]
+  siteFacts       SiteFact[]
+  settings        SiteSettings?
+  memberships     SiteMembership[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("strategist") // admin | strategist | reviewer | viewer
+  createdAt    DateTime @default(now())
+  sessions     Session[]
+  memberships  SiteMembership[]
+  reviewDecisions ReviewItem[] @relation("ReviewDecidedBy")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model SiteMembership {
+  id     String @id @default(cuid())
+  userId String
+  siteId String
+  role   String @default("strategist")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, siteId])
+}
+
+model SiteSettings {
+  id                  String @id @default(cuid())
+  siteId              String @unique
+  site                Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  maxNewPostsPerMonth Int?
+  policyJson          String? // optional JSON overrides for ContentPolicy
+  localModifiersJson  String?
+  reviewerRosterJson  String?
+}
+
+// Unified audit output — one normalized shape for every recommendation.
+model Finding {
+  id              String   @id @default(cuid())
+  site            Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId          String
+  auditId         String   // e.g. "content" | "metadata" | "service-architecture"
+  category        String   // Service pages | Content | Metadata | Technical | Local | Conversion | Trust | New content
+  subjectType     String   // page | site | treatment | query | setting
+  subjectRef      String   // path, treatment name, query, etc.
+  subjectLabel    String
+  title           String
+  evidenceJson    String   @default("[]") // EvidencePoint[]
+  estMonthlyClicks Int     @default(0)
+  estBookingValue  Float?
+  confidence      Float    @default(1) // 0-1
+  effort          String   // Low | Medium | High
+  actionsJson     String   @default("[]") // ActionSpec[]
+  priorityValue   Float    @default(0)
+  status          String   @default("open") // open | drafted | in_review | done | dismissed | monitoring
+  reviewAfter     String?
+  fingerprint     String?  // stable identity across re-audits
+  // Legacy compat fields for opportunity-style display
+  impact          String   @default("Medium") // High | Medium | Low
+  source          String   @default("GSC")
+  createdAt       DateTime @default(now())
+  decidedAt       DateTime?
+
+  @@unique([siteId, fingerprint])
+  @@index([siteId])
+  @@index([siteId, status])
+  @@index([siteId, category])
+}
+
+// General-purpose facts captured from WP, booking pages, GBP, etc.
+model SiteFact {
+  id         String   @id @default(cuid())
+  site       Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId     String
+  kind       String   // wp_plugin | redirect | treatment_offered | author | gbp_profile | sitemap | wp_setting
+  key        String
+  value      String   // JSON payload
+  observedAt DateTime @default(now())
+
+  @@unique([siteId, kind, key])
+  @@index([siteId, kind])
+}
+
+model Opportunity {
+  id         String @id @default(cuid())
+  site       Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId     String
+  title      String
+  page       String
+  why        String
+  expected   String
+  impact     String // High | Medium | Low
+  confidence Int
+  effort     String // Low | Medium | High
+  source     String // GSC | GA4 | Crawl | Competitor | Manual
+  type       String // Metadata | Content | Internal links | Schema | Technical | New page
+  status     String @default("Open") // Open | Drafted | Done | Dismissed
+  // Stable identity across re-audits (page + type + core signal) so a refresh
+  // merges the checklist instead of wiping it — status/progress is preserved.
+  fingerprint String?
+  // Phase 3: the computed opportunity score that drives ranking.
+  score      Float?
+
+  createdAt DateTime  @default(now())
+  decidedAt DateTime? // when marked Done/Dismissed
+
+  @@index([siteId])
+  @@index([siteId, fingerprint])
+}
+
+// Maps the ContentEditor's EditorItem — a proposed field-level change.
+model Recommendation {
+  id        String  @id @default(cuid())
+  site      Site    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId    String
+  tab       String  // title | meta | headings | body | faq | schema | links
+  page      String
+  current   String
+  suggested     String
+  elementorJson String? // Elementor container JSON for faq tab (pushable section)
+  reason        String
+  queries       String  // JSON string[]
+  chars         Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([siteId, tab])
+}
+
+model ElementorSection {
+  id        String  @id @default(cuid())
+  site      Site    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId    String
+  name      String
+  status    String
+  ok        Boolean
+  useCase   String
+  placement String
+  notes     String
+  rationale String
+  size      String
+  json      String // Elementor template JSON (validated before shown copy-ready)
+
+  createdAt DateTime @default(now())
+
+  @@index([siteId])
+}
+
+model ReviewItem {
+  id        String @id @default(cuid())
+  site      Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId    String
+  title     String
+  detail    String
+  type      String
+  risk      String // High | Medium | Low
+  reviewer  String
+  dest      String
+  status    String @default("Pending") // Pending | Approved | Rejected
+  findingId String? // links back to the Finding that spawned this action
+  actionKind String? // meta_rewrite | content_update | blog_post | elementor_page | redirect | gbp_post
+  payloadJson String? // serialized action payload for execute step
+  decidedById String?
+  decidedBy   User?   @relation("ReviewDecidedBy", fields: [decidedById], references: [id])
+
+  createdAt DateTime  @default(now())
+  decidedAt DateTime? // when approved/rejected — orders "Recently published"
+  executedAt DateTime? // when pushed to WordPress via publish step
+  verificationJson String? // post-push live verification result (checks + pass/fail)
+  readinessJson String? // pre-publish readiness (autonomous "verified draft" checks)
+
+  @@index([siteId])
+  @@index([siteId, findingId])
+}
+
+// Assorted per-site display arrays for Overview/Competitors/Technical/Impact.
+// Phase-0 scaffolding: a single JSON blob, to be replaced field-by-field as the
+// real integrations compute these values.
+model DashboardData {
+  id      String @id @default(cuid())
+  site    Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId  String @unique
+  payload String // JSON blob keyed by section (metrics, compGaps, techIssues, ...)
+}
+
+// ---------------------------------------------------------------------------
+// Forward-looking tables (defined now, populated by later phases)
+// ---------------------------------------------------------------------------
+
+// Phase 1: WordPress + Elementor read connector.
+model Page {
+  id         String   @id @default(cuid())
+  site       Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId     String
+  wpId       Int?
+  slug       String
+  // Canonical permalink from WordPress link field — the real page identity.
+  url        String?
+  unresolved Boolean  @default(false) // true when link was unavailable at sync
+  type       String   @default("page") // "page" | "post" — WordPress content type
+  title      String?
+  metaTitle  String?
+  metaDesc   String?
+  /** Yoast/Rank Math JSON-LD graph from last WordPress sync (yoast_head_json.schema). */
+  liveSchemaJson String?
+  // Raw builder payloads captured for structure-aware generation + revert record.
+  elementorData String? // _elementor_data JSON
+  contentHtml   String?
+  updatedAt  DateTime @updatedAt
+
+  @@unique([siteId, wpId])
+  @@unique([siteId, slug, type])
+  @@index([siteId])
+  @@index([siteId, url])
+}
+
+// Phase 5: on every sync, snapshot current state for manual revert.
+model Snapshot {
+  id        String   @id @default(cuid())
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId    String
+  slug      String
+  kind      String   // elementor | meta | content | schema
+  payload   String
+  takenAt   DateTime @default(now())
+
+  @@index([siteId, slug])
+}
+
+// Phase 2: Google Search Console cache (daily deltas, not full re-pulls).
+model GscRow {
+  id          String   @id @default(cuid())
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId      String
+  date        DateTime
+  page        String
+  query       String?
+  country     String?
+  device      String?
+  clicks      Int
+  impressions Int
+  ctr         Float
+  position    Float
+
+  @@index([siteId, date])
+  @@index([siteId, page])
+}
+
+// Phase 2: GA4 Data API cache.
+model Ga4Row {
+  id             String   @id @default(cuid())
+  site           Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId         String
+  date           DateTime
+  landingPage    String
+  sessions       Int
+  engagementRate Float
+  conversions    Int
+
+  @@index([siteId, date])
+}
+
+// Phase 5: human-logged changes, re-checked for impact on next sync.
+model ChangeLog {
+  id              String   @id @default(cuid())
+  site            Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId          String
+  page            String
+  element         String   // Elementor element id | meta field | schema block | finding action
+  before          String?
+  after           String?
+  publishedAt     DateTime @default(now())
+  verdict         String?  // Improving | Monitoring | Regressed
+  findingId       String?
+  clicksBefore28d Int?
+  clicksAfter28d  Int?
+  positionBefore  Float?
+  positionAfter   Float?
+  measuredAt      DateTime?
+
+  @@index([siteId])
+  @@index([siteId, findingId])
+}
+
+// Phase 6: AI-generated blog posts (Content Studio) — drafted from real search
+// gaps, reviewed, then published to WordPress as a draft post.
+model BlogPost {
+  id              String   @id @default(cuid())
+  site            Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId          String
+  targetKeyword   String
+  title           String
+  metaTitle       String
+  metaDescription String
+  slug            String
+  excerpt         String
+  bodyHtml        String   // WordPress-ready HTML
+  faqsJson        String   @default("[]") // [{q,a}]
+  clusterJson     String   @default("{}") // { primary, supporting:[{keyword,monthlyImpressions}] }
+  internalLinks   String   @default("[]") // outbound: this post → existing pages [{path,anchor}]
+  inboundLinksJson String  @default("[]") // inbound: existing pages → this post [{path,anchor}]
+  categoriesJson  String   @default("[]") // string[]
+  imageQuery      String   @default("") // stock-photo search term
+  imageUrl        String? // chosen Pexels image URL
+  imageAlt        String?
+  imageCredit     String? // Pexels attribution
+  estClicks       Int?     // modeled monthly upside
+  status          String   @default("Draft") // Draft | Published
+  wpPostId        Int? // WordPress post id once published
+  wpEditUrl       String?
+  // YMYL gate: med spa content needs a named, credentialed reviewer before it
+  // can publish. Enforced by a SQLite trigger (see ensureDataGates in index.ts),
+  // not just the UI.
+  reviewerName        String?
+  reviewerCredentials String?
+  reviewApprovedAt    DateTime?
+  // Lastmod integrity: contentUpdatedAt may only advance when the same write
+  // marks the change substantive (also trigger-enforced). Cosmetic edits never
+  // move the date.
+  isSubstantive    Boolean   @default(false)
+  contentUpdatedAt DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([siteId])
+}
+
+// Data-integrity pass: how much data the Content Engine actually has for a
+// client, stored so the confidence panel and gates read a consistent snapshot.
+model ContentDataProfile {
+  id                  String   @id @default(cuid())
+  site                Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId              String   @unique
+  gscHistoryMonths    Float
+  gscCoverageGaps     String   @default("[]") // JSON string[] of YYYY-MM months with no data
+  pagesTotal          Int
+  pagesWithGscData    Int
+  ga4Conversions      Int
+  ga4Status           String // active | partial | none
+  keywordUniverseSize Int
+  universeSeededAt    DateTime? // end of the GSC window the universe was built from
+  computedAt          DateTime @updatedAt
+}
+
+// Phase 5: AI competitor analysis — fetch competitor URLs, study the gap.
+model CompetitorScan {
+  id            String   @id @default(cuid())
+  site          Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId        String
+  targetKeyword String
+  ourPath       String?
+  urls          String   // JSON string[]
+  findings      String   // JSON gap analysis
+  createdAt     DateTime @default(now())
+
+  @@index([siteId])
+}

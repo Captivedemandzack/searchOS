@@ -1,9 +1,17 @@
-import { opps } from '../data'
-import { useOpportunities } from '../selectors'
+import { useWorkItems } from '../selectors'
 import { useStore } from '../store'
-import { colors, th } from '../theme'
+import { useSiteId } from '../data/DataProvider'
+import { colors, mono, pill, th } from '../theme'
 import { Card } from '../components/primitives'
 import { HButton, HDiv } from '../lib/Hover'
+import { EstimateUpside } from '../components/EstimateUpside'
+import { OpportunityRowButton } from '../components/OpportunityRowButton'
+import { openOpportunity, hasServerDraft } from '../lib/workflow'
+import type { CompletedStep, NextStep } from '../lib/api'
+import { useData } from '../data/DataProvider'
+import { OpportunityDetail } from './OpportunityDetail'
+
+const gridCols = 'minmax(0,2fr) 100px 72px 90px 110px 100px'
 
 const selectStyle = {
   border: `1px solid ${colors.borderInput}`,
@@ -14,26 +22,93 @@ const selectStyle = {
   color: colors.text,
 }
 
+const TAB_LABELS = {
+  todo: 'To do',
+  in_progress: 'In progress',
+  completed: 'Completed',
+} as const
+
+function filterSteps<T extends NextStep | CompletedStep>(rows: T[], f: ReturnType<typeof useStore>['state']['filters']): T[] {
+  return rows.filter(
+    (step) =>
+      (f.type === 'All' || step.category === f.type) &&
+      (f.effort === 'All' || step.effort === f.effort) &&
+      (f.impact === 'All' || step.impact === f.impact) &&
+      (f.source === 'All' || step.source === f.source),
+  )
+}
+
 export function OpportunitiesView() {
-  const { state, setState } = useStore()
-  const { filtered, mkOpp } = useOpportunities()
+  const { state, setState, nav } = useStore()
+  const siteId = useSiteId()
+  const { reviewData } = useData()
+  const { todo, inProgress, completed, openCount } = useWorkItems()
   const f = state.filters
-  const rows = filtered.map(mkOpp)
+
+  if (state.oppDetailStep) {
+    return <OpportunityDetail />
+  }
+
+  const tab = state.oppTab
+  const tabRows =
+    tab === 'todo' ? todo : tab === 'in_progress' ? inProgress : completed
+  const rows = filterSteps(tabRows, f)
+
+  const tabCounts = {
+    todo: todo.length,
+    in_progress: inProgress.length,
+    completed: completed.length,
+  }
+
+  const emptyCopy = {
+    todo: {
+      title: 'Nothing on your list right now',
+      body: 'After your next sync, ranked opportunities from Search Console and site audits will show up here.',
+    },
+    in_progress: {
+      title: 'No work in progress',
+      body: 'Click Start on any opportunity to open its game plan. It moves here so you can pick up where you left off.',
+    },
+    completed: {
+      title: 'No completed work yet',
+      body: 'Changes appear here after you push them to WordPress. Approve-only items stay in In progress until they are live on the site.',
+    },
+  }
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '2px 0 6px' }}>
         <h1 style={{ margin: 0, fontSize: 19, fontWeight: 650, letterSpacing: '-.01em' }}>Opportunities</h1>
         <span style={{ fontSize: 12.5, color: colors.muted2 }}>
-          {filtered.length} of {opps.length} shown · sorted by priority
+          {openCount} open · ranked by impact and effort
         </span>
       </div>
       <p style={{ margin: '0 0 16px', fontSize: 12.5, color: colors.muted }}>
-        Ranked by expected impact × confidence, weighted against effort. Nothing here changes your site
-        until it clears review.
+        Start from To do, resume from In progress, and track verified changes under Completed.
       </p>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 4, background: colors.chipBg, borderRadius: 8, padding: 3 }}>
+          {(['todo', 'in_progress', 'completed'] as const).map((t) => (
+            <HButton
+              key={t}
+              onClick={() => setState({ oppTab: t })}
+              hover={{ background: tab === t ? '#fff' : colors.chipBg2 }}
+              style={{
+                background: tab === t ? '#fff' : 'transparent',
+                border: 'none',
+                borderRadius: 6,
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: tab === t ? 600 : 500,
+                color: tab === t ? colors.ink : colors.muted,
+                boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+              }}
+            >
+              {TAB_LABELS[t]} ({tabCounts[t]})
+            </HButton>
+          ))}
+        </div>
         <select value={f.type} onChange={(e) => setState({ filters: { ...f, type: e.target.value } })} style={selectStyle}>
           <option value="All">Type: All</option>
           <option>Metadata</option>
@@ -43,30 +118,17 @@ export function OpportunitiesView() {
           <option>Technical</option>
           <option>New page</option>
         </select>
-        <select value={f.impact} onChange={(e) => setState({ filters: { ...f, impact: e.target.value } })} style={selectStyle}>
-          <option value="All">Impact: All</option>
-          <option>High</option>
-          <option>Medium</option>
-          <option>Low</option>
-        </select>
         <select value={f.effort} onChange={(e) => setState({ filters: { ...f, effort: e.target.value } })} style={selectStyle}>
           <option value="All">Effort: All</option>
           <option>Low</option>
           <option>Medium</option>
           <option>High</option>
         </select>
-        <select value={f.source} onChange={(e) => setState({ filters: { ...f, source: e.target.value } })} style={selectStyle}>
-          <option value="All">Source: All</option>
-          <option>GSC</option>
-          <option>GA4</option>
-          <option>Crawl</option>
-          <option>Competitor</option>
-          <option>Manual</option>
-        </select>
-        <select value={f.status} onChange={(e) => setState({ filters: { ...f, status: e.target.value } })} style={selectStyle}>
-          <option value="All">Status: All</option>
-          <option>Open</option>
-          <option>In review</option>
+        <select value={f.impact} onChange={(e) => setState({ filters: { ...f, impact: e.target.value } })} style={selectStyle}>
+          <option value="All">Impact: All</option>
+          <option>High</option>
+          <option>Medium</option>
+          <option>Low</option>
         </select>
       </div>
 
@@ -74,7 +136,7 @@ export function OpportunitiesView() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(0,1.6fr) 90px 90px 70px 110px 200px',
+            gridTemplateColumns: gridCols,
             gap: 12,
             alignItems: 'center',
             padding: '9px 18px',
@@ -82,116 +144,170 @@ export function OpportunitiesView() {
             background: colors.subtle,
           }}
         >
-          <span style={th}>Opportunity</span>
-          <span style={th}>Impact</span>
-          <span style={th}>Confidence</span>
+          <span style={th}>
+            {tab === 'completed' ? 'Completed item' : 'Opportunity'}
+          </span>
+          <span style={{ ...th, textAlign: 'right' }}>Expected</span>
           <span style={th}>Effort</span>
+          <span style={th}>Category</span>
           <span style={th}>Source</span>
           <span />
         </div>
 
-        {rows.map((o) => (
-          <HDiv key={o.id} style={o.rowStyle} hover={{ background: colors.subtleAlt }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: colors.ink }}>{o.title}</div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: colors.muted2,
-                  marginTop: 1,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                <span style={{ fontFamily: "'Geist Mono', monospace" }}>{o.page}</span> — {o.why}
-              </div>
-            </div>
-            <span style={o.impactPill}>{o.impact}</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div style={{ width: 34, height: 4, background: colors.track, borderRadius: 99, overflow: 'hidden' }}>
-                <div style={{ height: '100%', background: colors.accent, borderRadius: 99, width: o.confPct }} />
-              </div>
-              <span style={{ fontSize: 11.5, color: colors.muted }}>{o.confidence}%</span>
-            </div>
-            <span style={{ fontSize: 12, color: colors.text }}>{o.effort}</span>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 550,
-                color: colors.muted,
-                background: colors.chipBg2,
-                borderRadius: 6,
-                padding: '2px 7px',
-                justifySelf: 'start',
-              }}
-            >
-              {o.source}
-            </span>
-            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-              {o.inReview && (
-                <span
-                  style={{
-                    fontSize: 11.5,
-                    fontWeight: 600,
-                    color: colors.amber,
-                    background: colors.amberBg,
-                    borderRadius: 99,
-                    padding: '4px 10px',
-                  }}
-                >
-                  In review queue
-                </span>
-              )}
-              {o.showButtons && (
-                <>
-                  <HButton
-                    onClick={o.onReview}
-                    hover={{ background: '#f6f6f1' }}
-                    style={{
-                      background: '#fff',
-                      border: `1px solid ${colors.borderBtn}`,
-                      borderRadius: 7,
-                      padding: '5px 10px',
-                      fontSize: 11.5,
-                      fontWeight: 550,
-                      color: colors.ink,
-                    }}
-                  >
-                    Review action
-                  </HButton>
-                  <HButton
-                    onClick={o.onGenerate}
-                    hover={{ background: colors.inkStrong }}
-                    style={{
-                      background: colors.ink,
-                      border: `1px solid ${colors.ink}`,
-                      borderRadius: 7,
-                      padding: '5px 10px',
-                      fontSize: 11.5,
-                      fontWeight: 550,
-                      color: '#fff',
-                    }}
-                  >
-                    {o.genLabel}
-                  </HButton>
-                </>
-              )}
-            </div>
-          </HDiv>
+        {rows.map((step) => (
+          <WorkRow
+            key={step.id}
+            step={step}
+            tab={tab}
+            onOpen={() =>
+              openOpportunity(step, { nav, setState }, reviewData, { tab, siteId: siteId ?? undefined })
+            }
+          />
         ))}
 
-        {filtered.length === 0 && (
-          <div style={{ padding: 36, textAlign: 'center' }}>
+        {rows.length === 0 && (
+          <div style={{ padding: 40, textAlign: 'center' }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
-              No opportunities match these filters
+              {emptyCopy[tab].title}
             </div>
-            <div style={{ fontSize: 12, color: colors.muted2, marginTop: 4 }}>
-              Try widening the impact or source filter.
+            <div style={{ fontSize: 12, color: colors.muted2, marginTop: 6, maxWidth: 400, margin: '6px auto 0' }}>
+              {emptyCopy[tab].body}
             </div>
           </div>
         )}
       </Card>
     </div>
+  )
+}
+
+function WorkRow({
+  step,
+  tab,
+  onOpen,
+}: {
+  step: NextStep | CompletedStep
+  tab: 'todo' | 'in_progress' | 'completed'
+  onOpen: () => void
+}) {
+  const completed = tab === 'completed'
+  const completedStep = step as CompletedStep
+  const statusLabel = completed
+    ? completedStep.completedLabel ?? 'Completed'
+    : hasServerDraft(step)
+      ? 'Draft ready'
+      : 'Started'
+
+  return (
+    <HDiv
+      onClick={onOpen}
+      hover={{ background: colors.subtleAlt }}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: gridCols,
+        gap: 12,
+        alignItems: 'center',
+        padding: '12px 18px',
+        borderBottom: `1px solid ${colors.hair3}`,
+        cursor: 'pointer',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: colors.ink,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {step.title}
+        </div>
+        <div
+          style={{
+            fontSize: 11.5,
+            color: colors.muted2,
+            marginTop: 2,
+            fontFamily: mono,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {step.context}
+        </div>
+      </div>
+
+      <div style={{ textAlign: 'right' }}>
+        {step.estMonthlyClicks > 0 ? (
+          <EstimateUpside estMonthlyClicks={step.estMonthlyClicks} compact />
+        ) : (
+          <span style={{ fontSize: 11.5, color: colors.muted2 }}>—</span>
+        )}
+      </div>
+
+      <span style={{ fontSize: 12, color: colors.muted }}>{step.effort}</span>
+      <span style={{ fontSize: 11.5, color: colors.text }}>{step.category}</span>
+      <span style={{ fontSize: 11.5, color: colors.muted2 }}>{step.source}</span>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+        {completed ? (
+          <span
+            style={pill(
+              statusLabel === 'Rejected' ? colors.red : colors.green,
+              statusLabel === 'Rejected' ? colors.redBg : colors.greenBg,
+            )}
+          >
+            {statusLabel}
+          </span>
+        ) : tab === 'in_progress' ? (
+          <>
+            {!hasServerDraft(step) ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 550,
+                  color: colors.muted,
+                  background: colors.chipBg,
+                  borderRadius: 99,
+                  padding: '2px 8px',
+                }}
+              >
+                {statusLabel}
+              </span>
+            ) : (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: colors.amber,
+                  background: colors.amberBg,
+                  borderRadius: 99,
+                  padding: '2px 8px',
+                }}
+              >
+                Draft ready
+              </span>
+            )}
+            <OpportunityRowButton
+              variant="continue"
+              onClick={(e) => {
+                e?.stopPropagation?.()
+                onOpen()
+              }}
+            />
+          </>
+        ) : (
+          <OpportunityRowButton
+            variant="start"
+            onClick={(e) => {
+              e?.stopPropagation?.()
+              onOpen()
+            }}
+          />
+        )}
+      </div>
+    </HDiv>
   )
 }

@@ -5,12 +5,18 @@
   "type": "module",
   "description": "Groundwork — an SEO operating system for WordPress + Elementor sites",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -n web,api -c cyan,magenta \"vite\" \"npm --prefix server run dev\"",
+    "dev:web": "vite",
+    "dev:api": "npm --prefix server run dev",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "test": "npm --prefix server run test",
+    "seed": "npm --prefix server run seed",
+    "db:reset": "npm --prefix server run db:reset"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.62.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -18,7 +24,8 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^8.1.3"
   }
 }

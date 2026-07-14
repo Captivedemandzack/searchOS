@@ -5,9 +5,12 @@
 
 export type ViewId =
   | 'overview'
+  | 'audit'
+  | 'act'
   | 'opportunities'
   | 'pages'
   | 'editor'
+  | 'studio'
   | 'elementor'
   | 'competitors'
   | 'technical'
@@ -34,6 +37,7 @@ export type Opportunity = {
   effort: 'Low' | 'Medium' | 'High'
   source: 'GSC' | 'GA4' | 'Crawl' | 'Competitor' | 'Manual'
   type: 'Metadata' | 'Content' | 'Internal links' | 'Schema' | 'Technical' | 'New page'
+  status?: string // persisted checklist status: Open | Drafted | Done | Dismissed
 }
 
 export const opps: Opportunity[] = [
@@ -54,16 +58,22 @@ export const opps: Opportunity[] = [
 export type EditorItem = {
   id: string
   page: string
+  type?: string // "page" | "post" — WordPress content type of the target page
   current: string
   suggested: string
+  elementorJson?: string | null
   reason: string
   queries: string[]
   chars: boolean
 }
 
-export type EditorTabId = 'title' | 'meta' | 'headings' | 'body' | 'faq' | 'schema' | 'links'
+/** Storage keys from the API — title and meta are grouped in the SEO tab in the UI. */
+export type RecommendationTabId = 'title' | 'meta' | 'headings' | 'body' | 'faq' | 'schema' | 'links'
 
-export const editorData: Record<EditorTabId, EditorItem[]> = {
+/** Editor navigation tabs (seo = title tag + meta description together). */
+export type EditorTabId = 'seo' | 'headings' | 'body' | 'faq' | 'schema' | 'links'
+
+export const editorData: Record<RecommendationTabId, EditorItem[]> = {
   title: [
     { id: 'e1', page: '/botox-nashville', current: 'Botox Nashville | SLK Clinic', suggested: 'Botox in Nashville: Pricing & Same-Week Appointments | SLK', reason: '“botox nashville cost” gets 9.4k impressions at 0.9% CTR. Titles with explicit pricing intent average 2.8× CTR on this site’s service pages.', queries: ['botox nashville cost', 'botox nashville', 'botox specials nashville'], chars: true },
     { id: 'e2', page: '/laser-hair-removal', current: 'Laser Hair Removal | SLK Clinic', suggested: 'Laser Hair Removal Nashville — Prices & Packages | SLK', reason: 'No geo modifier in the current title despite 78% of impressions coming from Nashville-modified queries.', queries: ['laser hair removal nashville', 'laser hair removal cost nashville'], chars: true },
@@ -92,14 +102,31 @@ export const editorData: Record<EditorTabId, EditorItem[]> = {
 }
 
 export const editorTabDefs: [EditorTabId, string][] = [
-  ['title', 'Title tag'],
-  ['meta', 'Meta description'],
+  ['seo', 'SEO title & meta'],
   ['headings', 'H1 / H2s'],
   ['body', 'Body copy'],
   ['faq', 'FAQ'],
   ['schema', 'Schema'],
-  ['links', 'Internal links'],
+  ['links', 'Links on this page'],
 ]
+
+export type ReviewDiff = {
+  subjectRef?: string
+  title?: { before: string; after: string } | null
+  meta?: { before: string; after: string } | null
+  content?: { tab: string; before: string; after: string; elementorReady?: boolean; postContentReady?: boolean }[]
+  manual?: boolean
+  instructions?: string
+}
+
+export type VerifyCheck = { label: string; ok: boolean; detail: string }
+
+export type PublishVerification = {
+  ok: boolean
+  checkedAt: string
+  verifiedUrl: string | null
+  checks: VerifyCheck[]
+}
 
 export type ReviewRow = {
   id: string
@@ -110,6 +137,12 @@ export type ReviewRow = {
   reviewer: string
   dest: string
   preset?: string
+  actionKind?: string | null
+  findingId?: string | null
+  executedAt?: string | null
+  publishTier?: string | null
+  diff?: ReviewDiff | null
+  verification?: PublishVerification | null
 }
 
 export const reviewData: ReviewRow[] = [
@@ -321,14 +354,9 @@ export const connections = [
 ]
 
 export const navDefs: [ViewId, string, number?][] = [
-  ['overview', 'Overview'],
-  ['opportunities', 'Opportunities', 12],
+  ['overview', 'Dashboard'],
+  ['opportunities', 'Opportunities'],
   ['pages', 'Pages'],
-  ['editor', 'Content Updates'],
-  ['elementor', 'Elementor JSON'],
-  ['competitors', 'Competitors'],
-  ['technical', 'Technical SEO'],
-  ['review', 'Review Queue'],
-  ['impact', 'Impact Tracking'],
+  ['impact', 'Impact'],
   ['settings', 'Settings'],
 ]

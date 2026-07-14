@@ -1,20 +1,63 @@
-import { techIssues } from '../data'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useData, useDataStatus, useSiteId } from '../data/DataProvider'
 import { useStore } from '../store'
 import { colors, riskPill, th } from '../theme'
 import { Card } from '../components/primitives'
 import { HButton } from '../lib/Hover'
+import { api } from '../lib/api'
 
 const cols = 'minmax(0,1.6fr) 90px 90px 130px 140px'
 
+function formatSyncedAt(iso: string | null | undefined): string {
+  if (!iso) return 'Not synced yet'
+  const d = new Date(iso)
+  const mins = Math.round((Date.now() - d.getTime()) / 60_000)
+  if (mins < 2) return 'Synced just now'
+  if (mins < 60) return `Synced ${mins} min ago`
+  return `Synced ${d.toLocaleDateString()}`
+}
+
 export function TechnicalView() {
   const { showToast } = useStore()
+  const siteId = useSiteId()
+  const queryClient = useQueryClient()
+  const { findings, sites } = useData()
+  const { state } = useStore()
+  const status = useDataStatus()
+  const site = sites[state.siteIdx]
+
+  const technicalFindings = findings.filter(
+    (f) => f.auditId === 'technical' || f.category === 'Technical',
+  )
+
+  const draftFix = useMutation({
+    mutationFn: (findingId: string) => api.draftFindingFix(siteId!, findingId),
+    onSuccess: () => {
+      showToast('Fix drafted — see Review Queue')
+      queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+      queryClient.invalidateQueries({ queryKey: ['audit-queue', siteId] })
+    },
+    onError: (err: Error) => showToast(err.message),
+  })
+
+  const rows = technicalFindings.map((f) => ({
+    id: f.id,
+    issue: f.title,
+    detail: f.evidence.map((e) => e.detail ?? `${e.metric}: ${e.value}`).join(' · ') || f.source,
+    affected: f.subject.label || f.subject.ref,
+    severity: f.impact,
+    status: f.status === 'open' ? 'Open' : f.status === 'drafted' ? 'Draft ready' : f.status,
+    fixReady: f.actions.length > 0 && f.status !== 'done',
+  }))
 
   return (
     <div>
       <div style={{ margin: '2px 0 16px' }}>
         <h1 style={{ margin: 0, fontSize: 19, fontWeight: 650, letterSpacing: '-.01em' }}>Technical SEO</h1>
         <div style={{ fontSize: 12.5, color: colors.muted2, marginTop: 3 }}>
-          From last crawl · Jul 6, 4:12 AM · 214 URLs
+          {status === 'live'
+            ? `From WordPress sync · ${formatSyncedAt(site?.lastSyncedAt ?? null)} · ${rows.length} issue${rows.length === 1 ? '' : 's'}`
+            : 'Connect WordPress and sync to load technical findings'}
         </div>
       </div>
 
@@ -35,9 +78,16 @@ export function TechnicalView() {
           <span style={th}>Status</span>
           <span />
         </div>
-        {techIssues.map((ti) => (
+        {rows.length === 0 && (
+          <div style={{ padding: 24, fontSize: 12.5, color: colors.muted2, textAlign: 'center' }}>
+            {status === 'live'
+              ? 'No technical issues detected. Sync WordPress to refresh plugin, sitemap, and redirect checks.'
+              : 'Loading technical findings…'}
+          </div>
+        )}
+        {rows.map((ti) => (
           <div
-            key={ti.issue}
+            key={ti.id}
             style={{
               display: 'grid',
               gridTemplateColumns: cols,
@@ -56,7 +106,7 @@ export function TechnicalView() {
             <span style={{ fontSize: 12, color: colors.muted }}>{ti.status}</span>
             {ti.fixReady ? (
               <HButton
-                onClick={() => showToast('Fix added to review queue')}
+                onClick={() => siteId && draftFix.mutate(ti.id)}
                 hover={{ background: '#f6f6f1' }}
                 style={{
                   background: '#fff',
@@ -67,6 +117,7 @@ export function TechnicalView() {
                   fontWeight: 550,
                   color: colors.ink,
                   justifySelf: 'end',
+                  opacity: draftFix.isPending ? 0.6 : 1,
                 }}
               >
                 Queue fix

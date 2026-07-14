@@ -1,13 +1,16 @@
 import { navDefs } from '../data'
-import { useReview } from '../selectors'
-import { useStore, syncMeta } from '../store'
+import { useData } from '../data/DataProvider'
+import { useWorkItems } from '../selectors'
+import { useStore, syncMeta, useMinuteTick } from '../store'
 import { colors } from '../theme'
 import { HButton } from '../lib/Hover'
 
 export function Sidebar() {
-  const { state, nav, cycleSync } = useStore()
-  const { pendingCount } = useReview()
-  const sync = syncMeta(state.syncState)
+  const { state, nav } = useStore()
+  const { openCount } = useWorkItems()
+  const { sites } = useData()
+  const now = useMinuteTick()
+  const sync = syncMeta(sites[state.siteIdx]?.lastSyncedAt, now)
 
   return (
     <nav
@@ -47,7 +50,7 @@ export function Sidebar() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         {navDefs.map(([id, label, count]) => {
           const active = state.view === id
-          const badge = id === 'review' ? pendingCount : count ?? false
+          const badge = id === 'opportunities' ? openCount : count ?? false
           return (
             <HButton
               key={id}
@@ -99,8 +102,8 @@ export function Sidebar() {
         }}
       >
         <button
-          onClick={cycleSync}
-          title="Cycle demo sync state"
+          onClick={() => nav('settings')}
+          title="Last data sync — manage connections in Settings"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -108,6 +111,7 @@ export function Sidebar() {
             background: 'none',
             border: 'none',
             padding: 0,
+            cursor: 'pointer',
           }}
         >
           <span

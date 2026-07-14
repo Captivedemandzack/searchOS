@@ -1,19 +1,45 @@
-import { sites } from '../data'
-import { useReview } from '../selectors'
-import { useStore, syncMeta } from '../store'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useData, useSiteId, useCurrentSite } from '../data/DataProvider'
+import { useWorkItems } from '../selectors'
+import { useStore, syncMeta, useMinuteTick } from '../store'
 import { colors, shadow } from '../theme'
 import { HButton } from '../lib/Hover'
+import { api } from '../lib/api'
 
 export function Topbar() {
-  const { state, setState, nav, showToast, cycleSync } = useStore()
-  const { pendingCount } = useReview()
-  const site = sites[state.siteIdx]
+  const { state, setState, nav, showToast } = useStore()
+  const { openCount } = useWorkItems()
+  const { sites } = useData()
+  const siteId = useSiteId()
+  const queryClient = useQueryClient()
+  const now = useMinuteTick()
+  const site = useCurrentSite()
+
+  // The one-click refresh: re-pull every connected source, merge the checklist,
+  // and auto-draft metadata. Then invalidate everything so the whole app updates.
+  const refresh = useMutation({
+    mutationFn: () => api.refresh(siteId!),
+    onSuccess: (r) => {
+      if (r.blogWritten) {
+        // The flagship outcome leads the toast.
+        showToast(`✍️ New blog written: “${r.blogWritten.title}” — see Content Studio`)
+      } else {
+        const parts: string[] = []
+        parts.push(r.synced.length ? `Synced ${r.synced.join(', ')}` : 'Re-audited')
+        if (r.audit.added) parts.push(`${r.audit.added} new`)
+        if (r.drafted) parts.push(`${r.drafted} drafted`)
+        showToast(parts.join(' · '))
+      }
+      queryClient.invalidateQueries()
+    },
+    onError: (e: Error) => showToast(e.message),
+  })
   const initials = site.name
     .split(' ')
     .map((w) => w[0])
     .slice(0, 2)
     .join('')
-  const sync = syncMeta(state.syncState)
+  const sync = syncMeta(site?.lastSyncedAt, now)
 
   return (
     <header
@@ -177,8 +203,8 @@ export function Topbar() {
       </select>
 
       <button
-        onClick={cycleSync}
-        title="Cycle demo sync state"
+        onClick={() => nav('settings')}
+        title="Last data sync — manage connections in Settings"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -188,6 +214,7 @@ export function Topbar() {
           background: 'none',
           border: 'none',
           padding: 0,
+          cursor: 'pointer',
         }}
       >
         <span
@@ -199,8 +226,16 @@ export function Topbar() {
       <div style={{ flex: 1 }} />
 
       <HButton
-        onClick={() => nav('review')}
-        hover={{ background: '#f6f6f1' }}
+        onClick={() => {
+          if (refresh.isPending) return
+          if (!siteId) {
+            showToast('Still connecting — try again in a moment')
+            return
+          }
+          refresh.mutate()
+        }}
+        hover={refresh.isPending ? undefined : { background: '#f6f6f1' }}
+        title="Re-pull Search Console, GA4 & WordPress, refresh the opportunity checklist, and auto-draft new metadata"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -211,27 +246,30 @@ export function Topbar() {
           padding: '6px 12px',
           fontSize: 12.5,
           fontWeight: 550,
-          color: colors.ink,
+          color: refresh.isPending ? colors.muted : colors.ink,
+          cursor: refresh.isPending ? 'default' : 'pointer',
         }}
       >
-        Review queue
         <span
           style={{
-            fontSize: 11,
-            fontWeight: 650,
-            color: colors.amber,
-            background: colors.amberBg,
-            borderRadius: 99,
-            padding: '1px 7px',
+            display: 'inline-block',
+            fontSize: 13,
+            lineHeight: 1,
+            animation: refresh.isPending ? 'gw-spin 1s linear infinite' : 'none',
           }}
         >
-          {pendingCount}
+          ⟳
         </span>
+        {refresh.isPending ? 'Refreshing…' : 'Refresh'}
       </HButton>
+
       <HButton
         onClick={() => nav('opportunities')}
         hover={{ background: colors.inkStrong }}
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
           background: colors.ink,
           color: '#fff',
           border: 'none',
@@ -241,7 +279,21 @@ export function Topbar() {
           fontWeight: 550,
         }}
       >
-        New update
+        Opportunities
+        {openCount > 0 ? (
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 650,
+              color: colors.ink,
+              background: '#fff',
+              borderRadius: 99,
+              padding: '1px 7px',
+            }}
+          >
+            {openCount}
+          </span>
+        ) : null}
       </HButton>
     </header>
   )

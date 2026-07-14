@@ -2,12 +2,14 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from 'react'
 import type { EditorTabId, ViewId } from './data'
+import type { NextStep } from './lib/api'
 
 export type SyncState = 'Synced' | 'Syncing' | 'Attention'
 
@@ -26,6 +28,17 @@ export type State = {
   dateRange: string
   filters: Filters
   oppStatus: Record<string, string> // id -> 'In review'
+  expandedOpp: string | null // opportunity row open in the Opportunities tab
+  selectedPage: string | null // path drilled into on the Pages tab
+  actFindingId: string | null // Finding being acted on in Act workspace
+  actOpportunityId: string | null // Opportunity being acted on in Act workspace
+  actScopePath: string | null // Page path when opening Act without a finding/opp
+  oppTab: 'todo' | 'in_progress' | 'completed' // Opportunities list sub-tab
+  oppDetailStep: NextStep | null // Open opportunity detail screen
+  /** Step ids the user has opened this session, keyed by site id. */
+  inProgressSteps: Record<string, string[]>
+  reviewFocusId: string | null // Resolved review item for the open opportunity
+  auditCategory: string // filter lens in Audit view
   generating: Record<string, boolean>
   editorTab: EditorTabId
   approvals: Record<string, 'approved' | 'rejected'>
@@ -45,10 +58,20 @@ const initialState: State = {
   siteMenuOpen: false,
   siteIdx: 0,
   dateRange: 'Last 28 days',
-  filters: { type: 'All', impact: 'All', effort: 'All', source: 'All', status: 'All' },
+  filters: { type: 'All', impact: 'All', effort: 'All', source: 'All', status: 'Active' },
   oppStatus: {},
+  expandedOpp: null,
+  selectedPage: null,
+  actFindingId: null,
+  actOpportunityId: null,
+  actScopePath: null,
+  oppTab: 'todo',
+  oppDetailStep: null,
+  inProgressSteps: {},
+  reviewFocusId: null,
+  auditCategory: 'All',
   generating: {},
-  editorTab: 'title',
+  editorTab: 'seo',
   approvals: {},
   editing: {},
   edits: {},
@@ -119,13 +142,36 @@ export function useStore(): StoreValue {
   return ctx
 }
 
-/** Sync indicator label + dot color + animation, derived from syncState. */
-export function syncMeta(sync: SyncState) {
-  if (sync === 'Syncing') {
-    return { label: 'Syncing GSC + GA4…', dot: '#d9a514', anim: 'gwPulse 1.2s ease-in-out infinite' }
+/** Human relative time, e.g. "3m ago", "2h ago", "just now". */
+function relativeTime(from: Date, now: number): string {
+  const secs = Math.max(0, Math.round((now - from.getTime()) / 1000))
+  if (secs < 45) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  return `${days}d ago`
+}
+
+/** Real sync indicator: label + dot color, derived from the site's last sync time. */
+export function syncMeta(lastSyncedAt: string | null | undefined, now: number) {
+  if (!lastSyncedAt) {
+    return { label: 'Not synced yet', dot: '#a0a096', anim: 'none' }
   }
-  if (sync === 'Attention') {
-    return { label: 'GA4 token expired', dot: '#b3261e', anim: 'none' }
+  return {
+    label: `Synced ${relativeTime(new Date(lastSyncedAt), now)}`,
+    dot: '#22a06b',
+    anim: 'none',
   }
-  return { label: 'Synced 12 min ago', dot: '#22a06b', anim: 'none' }
+}
+
+/** Re-renders once a minute so relative timestamps stay current. */
+export function useMinuteTick(): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+  return now
 }

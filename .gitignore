@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Local secrets (never commit)
+.env.local
+.env.*.local
+server/.env.local
+
+# Local SQLite database (connections + synced GSC/GA4 live here)
+*.db
+*.db-journal
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Vite cache
+.vite/
+node_modules/.vite/
+
+# Logs
+*.log
+npm-debug.log*
