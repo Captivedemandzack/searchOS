@@ -14,6 +14,7 @@ server/.env.local
 # Local SQLite database (connections + synced GSC/GA4 live here)
 *.db
 *.db-journal
+server/prisma/dev*
 
 # OS / editor
 .DS_Store
